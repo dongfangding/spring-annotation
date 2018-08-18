@@ -1,4 +1,4 @@
-package com.ddf.springmvc.annotation.configuration;
+package com.ddf.springmvc.annotation.configuration.ioc;
 
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.stereotype.Controller;
@@ -14,7 +14,4 @@ public class RootApplicationContextConfig {
     public RootApplicationContextConfig() {
         System.out.println("RootApplicationContextConfig配置类被读取。。。。。。。。。。。。。。");
     }
-
-
-
 }
