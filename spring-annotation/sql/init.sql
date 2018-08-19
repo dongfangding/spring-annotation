@@ -1,5 +1,6 @@
 CREATE DATABASE `spring-annotation` CHARACTER SET utf8 COLLATE utf8_general_ci;
 
+USE spring-annotation
 
 DROP TABLE IF EXISTS PERSON;
 CREATE TABLE PERSON(
