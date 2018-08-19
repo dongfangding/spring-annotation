@@ -8,6 +8,7 @@ import java.util.Map;
 
 /**
  * @author DDf on 2018/8/17
+ * 将当前请求的参数放在RequestContext这个类中
  */
 @Component
 @RequestScope

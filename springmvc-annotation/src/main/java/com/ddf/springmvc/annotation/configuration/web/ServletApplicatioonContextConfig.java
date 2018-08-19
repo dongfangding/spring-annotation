@@ -1,8 +1,6 @@
 package com.ddf.springmvc.annotation.configuration.web;
 
 import com.ddf.springmvc.annotation.configuration.interceptor.RequestContextInterceptor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.http.converter.HttpMessageConverter;
@@ -27,13 +25,11 @@ import java.util.List;
 @EnableWebMvc
 public class ServletApplicatioonContextConfig extends WebMvcConfigurerAdapter {
 
-    private Logger logger = LoggerFactory.getLogger(ServletApplicatioonContextConfig.class);
-
     @Autowired
     private RequestContextInterceptor requestContextInterceptor;
 
     public ServletApplicatioonContextConfig() {
-        logger.info("ServletApplicatioonContextConfig配置类被读取。。。。。。。。。。。。。");
+        System.out.println("ServletApplicatioonContextConfig配置类被读取。。。。。。。。。。。。。");
     }
 
 
@@ -59,7 +55,7 @@ public class ServletApplicatioonContextConfig extends WebMvcConfigurerAdapter {
      */
     @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
-        logger.info("addResourceHandlers...............");
+        System.out.println("addResourceHandlers...............");
         // 所有/static/** 相匹配的请求都到addResourceLocations指定的路径下获得资源
         // 当前项目请求/static/index.html则会找到/resource/static/index.html这个文件
         registry.addResourceHandler("/static/**").addResourceLocations("/static/",
@@ -73,7 +69,7 @@ public class ServletApplicatioonContextConfig extends WebMvcConfigurerAdapter {
      */
     @Override
     public void addCorsMappings(CorsRegistry registry) {
-        logger.info("addCorsMappings.................");
+        System.out.println("addCorsMappings.................");
         // 这种默认是允许指定请求的所有的http方法
         registry.addMapping("/**");
     }
@@ -85,7 +81,7 @@ public class ServletApplicatioonContextConfig extends WebMvcConfigurerAdapter {
      */
     @Override
     public void addViewControllers(ViewControllerRegistry registry) {
-        logger.info("addViewControllers...............");
+        System.out.println("addViewControllers...............");
         registry.addViewController("/").setViewName("index");
     }
 
@@ -102,7 +98,7 @@ public class ServletApplicatioonContextConfig extends WebMvcConfigurerAdapter {
      */
     @Override
     public void configureViewResolvers(ViewResolverRegistry registry) {
-        logger.info("configureViewResolvers....................");
+        System.out.println("configureViewResolvers....................");
         registry.jsp("/views/", ".html");
     }
 
@@ -116,7 +112,7 @@ public class ServletApplicatioonContextConfig extends WebMvcConfigurerAdapter {
      */
     @Override
     public void configureDefaultServletHandling(DefaultServletHandlerConfigurer configurer) {
-        logger.info("configureDefaultServletHandling.......................");
+        System.out.println("configureDefaultServletHandling.......................");
         configurer.enable();
     }
 
@@ -127,7 +123,7 @@ public class ServletApplicatioonContextConfig extends WebMvcConfigurerAdapter {
      */
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
-        logger.info("addInterceptors...................");
+        System.out.println("addInterceptors...................");
         registry.addInterceptor(requestContextInterceptor).addPathPatterns("/**");
         super.addInterceptors(registry);
     }

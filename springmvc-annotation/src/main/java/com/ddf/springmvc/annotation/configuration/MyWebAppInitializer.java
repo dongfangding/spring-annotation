@@ -18,7 +18,7 @@ import java.util.Set;
  *
  * 请参考org.springframework:spring-web的jar包下在META-INF/services下有一个文件叫javax.servlet.ServletContainerInitializer，里面配置的一个类
  * {@link SpringServletContainerInitializer}。这个类实现了{@link ServletContainerInitializer},所以同样具备
- * 容器一启动就会调用该类的{@link SpringServletContainerInitializer#onStartup(Set, ServletContext)}方法，
+ * 容器一启动就会调用该类的{@link SpringServletContainerInitializer#onStartup(Set, ServletContext)}方法（Servlet3.0+机制）
  * 同时该类通过注解{@link javax.servlet.annotation.HandlesTypes}将所有实现{@link WebApplicationInitializer}
  * 接口的类都传入到onStartup()方法的第一个参数Set中,遍历所有的WebApplicationInitializer，把所有不是接口和子类的WebApplicationInitializer的添加到列表中，
  * 然后排序之后重新回调列表中的每个webApplicationInitializer的onStartup()方法

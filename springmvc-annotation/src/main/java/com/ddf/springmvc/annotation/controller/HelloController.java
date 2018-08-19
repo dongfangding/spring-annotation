@@ -7,8 +7,6 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.context.WebApplicationContext;
-import org.springframework.web.context.annotation.RequestScope;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -65,8 +63,5 @@ public class HelloController {
         for (String name : names1) {
             System.out.println(name);
         }
-
-
     }
-
 }

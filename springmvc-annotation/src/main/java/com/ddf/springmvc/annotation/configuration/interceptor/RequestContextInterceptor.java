@@ -12,6 +12,7 @@ import java.util.Enumeration;
 
 /**
  * @author DDf on 2018/8/17
+ * 拦截器，将所有当前请求的参数封装到RequestContext中
  */
 @Component
 public class RequestContextInterceptor implements HandlerInterceptor {
