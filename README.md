@@ -3475,11 +3475,12 @@ public class LogAspect {
     public void pointcut() {};
 
     /**
-     * 在目标方法执行之前执行
+     * 在目标方法执行之前执行，获取参数列表可以获取到Body参数，可以获取到Body参数，可以获取到Body参数!
      * @param joinPoint
      */
     @Before("pointcut()")
     public void beforeLog(JoinPoint joinPoint) {
+        // 可以获取到Body参数，可以获取到Body参数，可以获取到Body参数!
         Object[] args = joinPoint.getArgs();
         String methodName = joinPoint.getSignature().getName();
         System.out.println(methodName + "开始执行,参数列表" + Arrays.asList(args));
@@ -4837,4 +4838,1508 @@ servlet容器： org.apache.catalina.core.ApplicationContextFacade@1af646c8
 监听容器销毁..........
 javax.servlet.ServletContextEvent[source=org.apache.catalina.core.StandardContext$NoPluggabilityServletContext@1e99db28]
 ```
+
+## 五、注解版整合Spring+SpringMVC
+### 1. 可行性与整合思路研究
+#### 1.1 ServletContainerInitializer与SpringServletContainerInitializer
+依赖于Servlet3.0的`ServletContainerInitializer`特性，在`Servlet3.0`章节中，已经说过`ServletContainerInitializer`类型的类放在`\META-INF\services\javax.servlet.ServletContainerInitializer`这个文件下，把实现了`ServletContainerInitializer`类的全名写入文件内容里。会在容器启动的时候就调用文件里的类的`onStartup()`方法。我们引入了`Spring-web.jar`包之后，打开该jar包下的源码会这个路径的文件下会发现里面的内容为`org.springframework.web.SpringServletContainerInitializer`，打开这个类的源码会发现这个类就是实现了`ServletContainerInitializer`。而且该类通过注解`@HandlesTypes(WebApplicationInitializer.class)`将所有`WebApplicationInitializer`的所有子类都导入到了onStartup的参数`Set`中,`onStarupup()`的方法核心内容为遍历所有传入的`WebApplicationInitializer`类型的类，然后判断将不是接口和抽象类的实现放入到一个`List`中，加入完成之后，再进行排序，然后再遍历这个`List`获取所有的`WebApplicationInitializer`回调自己的`onStartup`方法。相关源码如下
+```java
+@HandlesTypes(WebApplicationInitializer.class)
+public class SpringServletContainerInitializer implements ServletContainerInitializer {
+ @Override
+ public void onStartup(Set<Class<?>> webAppInitializerClasses, ServletContext servletContext)
+   throws ServletException {
+
+  List<WebApplicationInitializer> initializers = new LinkedList<WebApplicationInitializer>();
+
+  if (webAppInitializerClasses != null) {
+   for (Class<?> waiClass : webAppInitializerClasses) {
+    // Be defensive: Some servlet containers provide us with invalid classes,
+    // no matter what @HandlesTypes says...
+    if (!waiClass.isInterface() && !Modifier.isAbstract(waiClass.getModifiers()) &&
+      WebApplicationInitializer.class.isAssignableFrom(waiClass)) {
+     try {
+      initializers.add((WebApplicationInitializer) waiClass.newInstance());
+     }
+     catch (Throwable ex) {
+      throw new ServletException("Failed to instantiate WebApplicationInitializer class", ex);
+     }
+    }
+   }
+  }
+
+  if (initializers.isEmpty()) {
+   servletContext.log("No Spring WebApplicationInitializer types detected on classpath");
+   return;
+  }
+
+  servletContext.log(initializers.size() + " Spring WebApplicationInitializers detected on classpath");
+  AnnotationAwareOrderComparator.sort(initializers);
+  for (WebApplicationInitializer initializer : initializers) {
+   initializer.onStartup(servletContext);
+  }
+ }
+}
+```
+#### 1.2 WebApplicationInitializer
+现在来看一下导入的`WebApplicationInitializer`，可以看到这就是一个接口，定义了一个方法`onStartup()`方法。该类的接口与`ServletContainerInitializer`本身类似，只不过该接口并没有实现`ServletContainerInitializer`这个接口，所以并不具备容器一旦初始化就被调用的功能。而`Spring`通过很巧妙的方式使用`SpringServletContainerInitializer`这个类来作为初始化类，并将所有实现了`WebApplicationInitializer`接口的类传递进来，然后调用`WebApplicationInitializer`类的`onStartup()`方法。这样对于使用者来说，只需要实现`WebApplicationInitializer`接口就可以，如果我们需要有多个初始化配置类，只需要用多个类去实现`WebApplicationInitializer`接口即可，而不需要复杂的在路径文件内容里，写入自定义实现的类全路径。
+```java
+public interface WebApplicationInitializer {=
+ void onStartup(ServletContext servletContext) throws ServletException;
+}
+```
+#### 1.3 WebApplicationInitializer的默认抽象实现
+三个默认抽象实现
+> WebApplicationInitializer
+>> AbstractContextLoaderInitializer
+>>> AbstractDispatcherServletInitializer
+>>>> AbstractAnnotationConfigDispatcherServletInitializer
+
+##### 1.3.1 AbstractContextLoaderInitializer
+`AbstractContextLoaderInitializer`定义了`onStartup()`调用`registerContextLoaderListener()`。然后调用`createRootApplicationContext()`，添加Spring根容器的`Listener`,`createRootApplicationContext()`这是一个抽象方法，因此是留给我们实现的
+##### 1.3.2 AbstractDispatcherServletInitializer
+`AbstractDispatcherServletInitializer`继承了`AbstractContextLoaderInitializer`，在完成`AbstractContextLoaderInitializer`的步骤后，然后调用
+ `registerDispatcherServlet()`方法来`new`一个`SpringMVC`的前端控制器`DispatcherServlet`,然后调用方法`getServletApplicationContextInitializers()`
+ 来创建`SpringMVC`的`WEB`容器，这个方法返回`Null`。`DispatcherServlet`在这时还只是一个普通的类，在往下开始通过代码
+            `ServletRegistration.Dynamic registration = servletContext.addServlet(servletName, dispatcherServlet);`
+来将`DispatcherServlet`注册成一个`Servlet`.名称默认为`dispatcher`，而该`Servlet`的`mapping`则通过方法`getServletMappings()`获取，
+这个方法又是一个抽象方法，我们可以重写父类的这个方法来自定义映射规则；
+因此可以结合`AbstractContextLoaderInitializer`，在这里只添加`Spring`的核心容器，如`service, dataSource`，而
+在`AbstractDispatcherServletInitializer`里添加`controllers, viewResolver, HandlerMapping`等和`web`相关的`bean`
+##### 1.3.3 AbstractAnnotationConfigDispatcherServletInitializer
+`AbstractAnnotationConfigDispatcherServletInitializer`继承`AbstractDispatcherServletInitializer`，它重写了父类的
+ `createRootApplicationContext()`和`createServletApplicationContext()`方法，这两个方法内部分别通过获取配置类来创建Spring的
+ 根容器和Web容器，创建根容器的配置类通过`getRootConfigClasses()`这个方法获取，创建web容器的配置类通过`getServletConfigClasses()`
+方法获取，因此又留给我们自定义
+
+#### 1.4 思路总结
+综上所述，如果我们要基于配置类的方法来自定义创建`Spring`和`SpringWebmvc`的容器，则需要继承`AbstractAnnotationConfigDispatcherServletInitializer`
+ 这个类即可，而通过重写`getRootConfigClasses()`这个方法来指定IOC容器的配置类，`getServletConfigClasses()`这个方法
+来指定WEB容器的配置类，然后复写`getServletMappings()`方法指定`DispatcherServlet`的映射规则
+
+### 2. 项目整合
+使用`maven`创建`web`工程
+#### 2.1 `pom.xml`内容如下
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.ddf.springmvc</groupId>
+    <artifactId>springmvc-annotation</artifactId>
+    <packaging>war</packaging>
+    <version>1.0-SNAPSHOT</version>
+    <dependencies>
+        <!-- https://mvnrepository.com/artifact/org.springframework/spring-context -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context</artifactId>
+            <version>4.3.12.RELEASE</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-webmvc</artifactId>
+            <version>4.3.12.RELEASE</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-aspects</artifactId>
+            <version>4.3.12.RELEASE</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-jdbc</artifactId>
+            <version>4.3.12.RELEASE</version>
+        </dependency>
+
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.12</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- https://mvnrepository.com/artifact/javax.inject/javax.inject -->
+        <dependency>
+            <groupId>javax.inject</groupId>
+            <artifactId>javax.inject</artifactId>
+            <version>1</version>
+        </dependency>
+
+        <!-- https://mvnrepository.com/artifact/mysql/mysql-connector-java -->
+        <dependency>
+            <groupId>mysql</groupId>
+            <artifactId>mysql-connector-java</artifactId>
+            <version>5.1.44</version>
+        </dependency>
+
+        <!-- https://mvnrepository.com/artifact/com.alibaba/druid -->
+        <dependency>
+            <groupId>com.alibaba</groupId>
+            <artifactId>druid</artifactId>
+            <version>1.1.10</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-core</artifactId>
+            <version>2.9.5</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-annotations</artifactId>
+            <version>2.9.5</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>2.9.5</version>
+        </dependency>
+    </dependencies>
+</project>
+```
+#### 2.2 `IOC`容器配置
+**注意： 一般配置类需要生效，需要加入注解`@Configuration`，但当前这个类，后面会通过编码来作为主配置类，所以不需要这个注解**
+新建`RootApplicationContextConfig.java`,用来扫描除`@Controller`以外的注解
+```java
+package com.ddf.springmvc.annotation.configuration.ioc;
+import org.springframework.context.annotation.ComponentScan;
+import org.springframework.stereotype.Controller;
+/**
+ * @author DDf on 2018/8/16
+ * 指定Spring根容器的配置类，排除web相关的bean
+ *
+ */
+@ComponentScan(value = "com.ddf.springmvc.annotation",
+        excludeFilters = {@ComponentScan.Filter(value = Controller.class)})
+public class RootApplicationContextConfig {
+
+    public RootApplicationContextConfig() {
+        System.out.println("RootApplicationContextConfig配置类被读取。。。。。。。。。。。。。。");
+    }
+}
+```
+#### 2.3 `WEB`容器配置类
+[NVC CONFIG](https://docs.spring.io/spring/docs/current/spring-framework-reference/web.html#mvc-config)
+**注意： 一般配置类需要生效，需要加入注解`@Configuration`，但当前这个类，后面会通过编码来作为主配置类，所以不需要这个注解**
+创建web容器配置类，只扫描controller,并且配置与web相关的bean.
+而web功能一般需要做定制才能使用，如视图解析器，消息转换器，静态资源映射，默认静态资源处理，拦截器.
+这里扩展一下，如果需要定制`MVC`的功能，可以继承类`WebMvcConfigurerAdapter`,并且在该类上使用注解`@EnableWebMvc`，则可以完全接管与定义`SpringMVC`。
+这个注解，再做一个延伸注意，在使用`SpringBoot`作为框架的项目中，如果要注册`web`组件，只需要继承`WebMvcConfigurerAdapter`该类，并将该类通过`@Configuration`注解标识为配置类即可，
+千万不要轻易加注解`@EnableWebMvc`。这个注解是完全接管MVC的定制，而`SpringBoot`默认做的定制则会完全失效。当然如果需要完全定制的话，则还是需要使用这个注解，要分清楚；
+
+**注意**
+因为如下配置牵扯到了添加拦截器，所以要提前把拦截器相关的代码先贴出来
+* 新建`RequestContext.java`,目的是把所有的请求参数封装到这个类中
+```java
+package com.ddf.springmvc.annotation.configuration.util;
+
+import org.springframework.stereotype.Component;
+import org.springframework.web.context.annotation.RequestScope;
+
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * @author DDf on 2018/8/17
+ * 将当前请求的参数放在RequestContext这个类中
+ */
+@Component
+@RequestScope
+public class RequestContext {
+
+    private Map<String, Object> paramsMap = new HashMap<>();
+
+    public Map<String, Object> getParamsMap() {
+        return paramsMap;
+    }
+}
+```
+* 新建拦截器代码`RequestContextInterceptor.java`
+```java
+package com.ddf.springmvc.annotation.configuration.interceptor;
+
+import com.ddf.springmvc.annotation.configuration.util.RequestContext;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+import org.springframework.web.servlet.HandlerInterceptor;
+import org.springframework.web.servlet.ModelAndView;
+
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import java.util.Enumeration;
+
+/**
+ * @author DDf on 2018/8/17
+ * 拦截器，将所有当前请求的参数封装到RequestContext中
+ */
+@Component
+public class RequestContextInterceptor implements HandlerInterceptor {
+    @Autowired
+    private RequestContext requestContext;
+
+    @Override
+    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
+        Enumeration<String> parameterNames = request.getParameterNames();
+        while (parameterNames.hasMoreElements()) {
+            String element = parameterNames.nextElement();
+            requestContext.getParamsMap().put(element, request.getParameter(element));
+        }
+        return true;
+    }
+
+    @Override
+    public void postHandle(HttpServletRequest request, HttpServletResponse response, Object handler, ModelAndView modelAndView) throws Exception {
+
+    }
+
+    @Override
+    public void afterCompletion(HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) throws Exception {
+
+    }
+}
+```
+*  新建配置类`ServletApplicatioonContextConfig.java`
+```java
+package com.ddf.springmvc.annotation.configuration.web;
+
+import com.ddf.springmvc.annotation.configuration.interceptor.RequestContextInterceptor;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.ComponentScan;
+import org.springframework.http.converter.HttpMessageConverter;
+import org.springframework.stereotype.Controller;
+import org.springframework.web.servlet.config.annotation.*;
+
+import java.util.List;
+
+/**
+ * @author DDf on 2018/8/16
+ * 创建web容器配置类，只扫描controller,并且配置与web相关的bean，
+ * controllers, viewResolver, HandlerMapping等
+ * useDefaultFilters默认为true，包含了@Componet, @Service, @Repository, @Controller等，
+ * 因此需要设置为false，不需要扫描那么多类型
+ *
+ * 所有与SpringMVC相关的配置请参考
+ * https://docs.spring.io/spring/docs/current/spring-framework-reference/web.html#mvc-config
+ */
+@ComponentScan(value = "com.ddf.springmvc.annotation", includeFilters = {
+        @ComponentScan.Filter(value = Controller.class)
+}, useDefaultFilters = false)
+@EnableWebMvc
+public class ServletApplicatioonContextConfig extends WebMvcConfigurerAdapter {
+
+    @Autowired
+    private RequestContextInterceptor requestContextInterceptor;
+
+    public ServletApplicatioonContextConfig() {
+        System.out.println("ServletApplicatioonContextConfig配置类被读取。。。。。。。。。。。。。");
+    }
+
+
+    /**
+     * 为了支持转json，则需要导入jackson的包，否则返回对象时会提示找不到转换器，而不能成功转换为json。
+     * 导入jsckson包就可以，未找到源码在哪里处理的这一块，导包就可以了
+     * @param converters
+     */
+    @Override
+    public void configureMessageConverters(List<HttpMessageConverter<?>> converters) {
+        super.configureMessageConverters(converters);
+    }
+
+    /**
+     * Add a resource handler for serving static resources based on the specified URL path
+     * * patterns. The handler will be invoked for every incoming request that matches to
+     * * one of the specified path patterns.
+     * 因为在web环境中最终所有的请求都会被dispatcherServlet拦截，然后由于配置了DefaultServletHandling,所以该映射如果
+     * dispatcher处理不了，就会交由默认的servlet当做静态资源来处理。但是通过 addResourceHandlers可以直接添加静态资源的映射，
+     * 即前端发送的请求如果与静态资源映射请求相匹配，那么就可以明确本次是请求静态资源，然后再该映射配置的静态资源地址直接获得资源
+     *
+     * @param registry
+     */
+    @Override
+    public void addResourceHandlers(ResourceHandlerRegistry registry) {
+        System.out.println("addResourceHandlers...............");
+        // 所有/static/** 相匹配的请求都到addResourceLocations指定的路径下获得资源
+        // 当前项目请求/static/index.html则会找到/resource/static/index.html这个文件
+        registry.addResourceHandler("/static/**").addResourceLocations("/static/",
+                "classpath:static/");
+    }
+
+    /**
+     * 通过调用new CorsRegistration(pathPattern);该类的config默认在实例化的如果没有配置允许的http方法，则会是所有的http方法，
+     * 没有找到方法，如何自定义添加指定允许的http方法
+     * @param registry
+     */
+    @Override
+    public void addCorsMappings(CorsRegistry registry) {
+        System.out.println("addCorsMappings.................");
+        // 这种默认是允许指定请求的所有的http方法
+        registry.addMapping("/**");
+    }
+
+    /**
+     *配置不经过handler的视图解析器，根据映射地址直接找指定视图，如下配置根据configureViewResolvers默认的视图解析的前缀和后缀，
+     * 则配置了项目默认的初始化界面为/views/index.html
+     * @param registry
+     */
+    @Override
+    public void addViewControllers(ViewControllerRegistry registry) {
+        System.out.println("addViewControllers...............");
+        registry.addViewController("/").setViewName("index");
+    }
+
+
+    /**
+     * 配置SpringMVC的视图解析器
+     * <bean id="viewResolver"
+     * class="org.springframework.web.servlet.view.InternalResourceViewResolver">
+     * <property name="viewClass" value="org.springframework.web.servlet.view.JstlView" />
+     * <property name="prefix" value="/views/" />
+     * <property name="suffix" value=".html" />
+     * </bean>
+     * @param registry
+     */
+    @Override
+    public void configureViewResolvers(ViewResolverRegistry registry) {
+        System.out.println("configureViewResolvers....................");
+        registry.jsp("/views/", ".html");
+    }
+
+
+    /**
+     * 开启静态资源的访问，否则所有的静态页面都不能访问
+     * 即当静态资源的请求被SpringMVC拦截后并没有找到对应的映射，这时候应该将请求交给默认的Servlet去处理页面
+     * 类似于原配置文件中 的
+     * <mvc:default-servlet-handler/>
+     * @param configurer
+     */
+    @Override
+    public void configureDefaultServletHandling(DefaultServletHandlerConfigurer configurer) {
+        System.out.println("configureDefaultServletHandling.......................");
+        configurer.enable();
+    }
+
+
+    /**
+     * 注册拦截器列表
+     * @param registry
+     */
+    @Override
+    public void addInterceptors(InterceptorRegistry registry) {
+        System.out.println("addInterceptors...................");
+        registry.addInterceptor(requestContextInterceptor).addPathPatterns("/**");
+        super.addInterceptors(registry);
+    }
+}
+```
+
+#### 2.4 实现`AbstractAnnotationConfigDispatcherServletInitializer`
+[基于注解版容器配置](https://docs.spring.io/spring/docs/current/spring-framework-reference/web.html#mvc-servlet-config)
+在前面两个章节，已经对`IOC`和`web`的容器做了配置，现在需要的就是对容器进行应用这些配置
+新建`MyWebAppInitializer.java`
+```java
+package com.ddf.springmvc.annotation.configuration;
+
+import com.ddf.springmvc.annotation.configuration.ioc.RootApplicationContextConfig;
+import com.ddf.springmvc.annotation.configuration.web.ServletApplicatioonContextConfig;
+import org.springframework.web.SpringServletContainerInitializer;
+import org.springframework.web.WebApplicationInitializer;
+import org.springframework.web.servlet.support.AbstractAnnotationConfigDispatcherServletInitializer;
+
+import javax.servlet.ServletContainerInitializer;
+import javax.servlet.ServletContext;
+import java.util.Set;
+
+/**
+ * @author DDf on 2018/8/16
+ *
+ * 基于注解版的SpringMVC的容器的配置，请参考官方文档
+ * https://docs.spring.io/spring/docs/current/spring-framework-reference/web.html#mvc-servlet-config
+ *
+ * 请参考org.springframework:spring-web的jar包下在META-INF/services下有一个文件叫javax.servlet.ServletContainerInitializer，里面配置的一个类
+ * {@link SpringServletContainerInitializer}。这个类实现了{@link ServletContainerInitializer},所以同样具备
+ * 容器一启动就会调用该类的{@link SpringServletContainerInitializer#onStartup(Set, ServletContext)}方法（Servlet3.0+机制）
+ * 同时该类通过注解{@link javax.servlet.annotation.HandlesTypes}将所有实现{@link WebApplicationInitializer}
+ * 接口的类都传入到onStartup()方法的第一个参数Set中,遍历所有的WebApplicationInitializer，把所有不是接口和子类的WebApplicationInitializer的添加到列表中，
+ * 然后排序之后重新回调列表中的每个webApplicationInitializer的onStartup()方法
+ *
+ * webApplicationInitializer接口有三个子抽象类实现
+ * 1. AbstractContextLoaderInitializer定义了启动之后创建registerContextLoaderListener。然后调用createRootApplicationContext()
+ * 添加Spring根容器的Listener,createRootApplicationContext()这是一个抽象方法，因此是留给我们实现的
+ *
+ * 2. AbstractDispatcherServletInitializer继承了AbstractContextLoaderInitializer，在完成1的步骤后，然后调用
+ * registerDispatcherServlet()方法来new一个SpringMVC的前端控制器DispatcherServlet,然后调用方法getServletApplicationContextInitializers
+ * 来创建SpringMVC的WEB容器，这个方法返回Null，。DispatcherServlet在这时还只是一个普通的类，在往下开始通过代码
+ * ServletRegistration.Dynamic registration = servletContext.addServlet(servletName, dispatcherServlet);
+ * 来将DispatcherServlet注册成一个Servlet.名称默认为dispatcher，而该Servlet的mapping则通过方法getServletMappings()获取，
+ * 这个方法又是一个抽象方法，我们可以重写父类的这个方法来自定义映射规则；
+ * 因此可以结合1，在1里只添加Spring IOC的核心容器，如service, dataSource，而
+ * 在2里添加controllers, viewResolver, HandlerMapping等和web相关的bean
+ *
+ * 3. AbstractAnnotationConfigDispatcherServletInitializer继承AbstractDispatcherServletInitializer，它重写了父类的
+ * createRootApplicationContext()和createServletApplicationContext()方法，这两个方法内部分别通过获取配置类来创建Spring的
+ * 根容器和Web容器，创建根容器的配置类通过getRootConfigClasses()这个方法获取，创建web容器的配置类通过getServletConfigClasses()
+ * 方法获取，因此又留给我们自定义
+ *
+ *
+ * =============================================================
+ * 综上所述，如果我们要基于配置类的方法来自定义创建Spring和SpringWebmvc的容器，则需要继承AbstractAnnotationConfigDispatcherServletInitializer
+ * 这个类即可，而通过重写getRootConfigClasses()这个方法来指定IOC容器的配置类，getServletConfigClasses()这个方法
+ * 来指定WEB容器的配置类，然后复写getServletMappings()方法指定DispatcherServlet的映射规则
+ *
+ */
+public class MyWebAppInitializer extends AbstractAnnotationConfigDispatcherServletInitializer {
+
+    /**
+     * 指定Spring根容器的配置类
+     * @return
+     */
+    @Override
+    protected Class<?>[] getRootConfigClasses() {
+        return new Class[] {RootApplicationContextConfig.class};
+    }
+
+    /**
+     * 指定WEB容器的配置类
+     * @return
+     */
+    @Override
+    protected Class<?>[] getServletConfigClasses() {
+        return new Class[] {ServletApplicatioonContextConfig.class};
+    }
+
+    /**
+     * 配置SpringMVC的DispatcherServlet的映射规则
+     * / 拦截所有请求，包括静态资源，但不包括JSP
+     * /* 拦截所有资源，包含静态资源，包含JSP，一般JSP无法显示就是因为这里配置出错
+     * @return
+     */
+    @Override
+    protected String[] getServletMappings() {
+        System.out.println(getServletName() + "映射规则为: " + "/");
+        return new String[] {"/"};
+    }
+}
+```
+
+#### 2.5 基本测试
+在完成了上述步骤之后，完成了对容器的基本定制，配置类是否能正常加载，需要测试
+1. 新建`HelloService.java`
+```java
+package com.ddf.springmvc.annotation.service;
+
+import org.springframework.stereotype.Service;
+
+/**
+ * @author DDf on 2018/8/17
+ */
+@Service
+public class HelloService {
+
+    public String hello(String name) {
+        return "hello " + name;
+    }
+}
+```
+
+2. 新建`HelloController.java`
+```java
+package com.ddf.springmvc.annotation.controller;
+
+import com.ddf.springmvc.annotation.service.HelloService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationContext;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * @author DDf on 2018/8/17
+ */
+@RestController
+@RequestMapping("hello")
+public class HelloController {
+    @Autowired
+    private HelloService helloService;
+    @Autowired
+    private ApplicationContext applicationContext;
+
+    @RequestMapping("/string")
+    public String string(@RequestParam String name) {
+        return helloService.hello(name);
+    }
+    
+    /**
+     * 需要导入jackson的包，则会返回json
+     * @param name
+     * @return
+     */
+    @RequestMapping("/json")
+    public Map json(@RequestParam String name) {
+        Map<String, Object> map = new HashMap<>();
+        map.put("msg", helloService.hello(name));
+        return map;
+    }
+
+
+    /**
+     * 在当前的环境中有两个ApplicationContext,一个是根据RootApplicationContextConfig建立的Root ApplicationContext，
+     * 一个是根据ServletApplicatioonContextConfig创建的ApplicationContext。 Root ApplicationContext是跟容器，是与spring相关的
+     * bean都被管理在这个容器中，而与web相关的容器都被管理在ApplicationContext中（这一块没有强制要求，根据代码会有不同的结果，但推荐这种分离的写法）
+     *
+     * 两个ApplicationContext都是由org.springframework.web.context.support.AnnotationConfigWebApplicationContext 实现的
+     */
+    @RequestMapping("application")
+    public void application() {
+        System.out.println(applicationContext.getClass());
+        System.out.println(applicationContext.getParent().getClass());
+        System.out.println(applicationContext==applicationContext.getParent());
+        
+        // 这个会打印所有在web容器中注册的bean
+        String[] names = applicationContext.getBeanDefinitionNames();
+        for (String name : names) {
+            System.out.println(name);
+        }
+
+        System.out.println("root application context。。。。。。。。。。。。。。。。。。。。。。。");
+
+        // 这个会打印所有在Root IOC容器中注册的bean
+        String[] names1 = applicationContext.getParent().getBeanDefinitionNames();
+        for (String name : names1) {
+            System.out.println(name);
+        }
+    }
+}
+```
+访问`{ip}:{port}/{application}/hello/string?name=ddf`，返回`hello ddf`
+访问`{ip}:{port}/{application}/hello/json?name=ddf`，返回
+```
+{
+  "msg": "hello ddf"
+}
+```
+
+
+
+### 3. 扩展定制
+以上已经完成了基本的整合，现在按照实际使用情况，会持续的往框架中添加扩展组件
+#### 3.1 数据源与事务与JdbcTemplate
+* 在classpath下新建`application.properties`配置文件
+```
+jdbc.name=druid
+jdbc.userName=root
+jdbc.password=123456
+jdbc.url=jdbc:mysql://localhost:3306/spring-annotation?characterEncoding=utf8&useSSL=true
+jdbc.driverClassName=com.mysql.jdbc.Driver
+```
+* 创建专门用来存取数据源相关的类`DataSourceConnection.java`
+```java
+package com.ddf.springmvc.annotation.configuration.jdbc;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.PropertySource;
+import org.springframework.stereotype.Component;
+
+/**
+ * @author DDf on 2018/8/13
+ * 解析数据连接的参数类
+ */
+@PropertySource("classpath:application.properties")
+@Component
+public class DataSourceConnection {
+    @Value("${jdbc.name}")
+    private String name;
+    @Value("${jdbc.userName}")
+    private String userName;
+    @Value("${jdbc.password}")
+    private String password;
+    @Value("${jdbc.driverClassName}")
+    private String driverClassName;
+    @Value("${jdbc.url}")
+    private String url;
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public String getUserName() {
+        return userName;
+    }
+
+    public void setUserName(String userName) {
+        this.userName = userName;
+    }
+
+    public String getPassword() {
+        return password;
+    }
+
+    public void setPassword(String password) {
+        this.password = password;
+    }
+
+    public String getDriverClassName() {
+        return driverClassName;
+    }
+
+    public void setDriverClassName(String driverClassName) {
+        this.driverClassName = driverClassName;
+    }
+
+    public String getUrl() {
+        return url;
+    }
+
+    public void setUrl(String url) {
+        this.url = url;
+    }
+
+    @Override
+    public String toString() {
+        return "DataSourceConnection{" +
+                "name='" + name + '\'' +
+                ", userName='" + userName + '\'' +
+                ", password='" + password + '\'' +
+                ", driverClassName='" + driverClassName + '\'' +
+                ", url='" + url + '\'' +
+                '}';
+    }
+}
+```
+
+* 修改主配置类`RootApplicationContextConfig.java`
+```java
+package com.ddf.springmvc.annotation.configuration.ioc;
+
+import com.alibaba.druid.pool.DruidDataSource;
+import com.ddf.springmvc.annotation.configuration.jdbc.DataSourceConnection;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.ComponentScan;
+import org.springframework.context.annotation.Primary;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.stereotype.Controller;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.EnableTransactionManagement;
+
+import javax.sql.DataSource;
+
+/**
+ * @author DDf on 2018/8/16
+ * 指定Spring根容器的配置类，排除web相关的bean
+ *
+ * @EnableTransactionManagement 开启基于注解的事务支持
+ *
+ */
+@ComponentScan(value = "com.ddf.springmvc.annotation",
+        excludeFilters = {@ComponentScan.Filter(value = Controller.class)})
+@EnableTransactionManagement
+public class RootApplicationContextConfig {
+
+    public RootApplicationContextConfig() {
+        System.out.println("RootApplicationContextConfig配置类被读取。。。。。。。。。。。。。。");
+    }
+
+
+    /**
+     * 向容器中注入DataSource，属性来自于DataSourceConnection，实际注入的是DataSource的DruidDataSource实现
+     * DataSourceConnection会自动从IOC容器中获取
+     * @Primary 如果要注入通过类型获取的Bean类型为DataSource， 则默认获取druidDataSource。防止注入多个不同名DataSource其它使用地方报错
+     * @param dataSourceConnection
+     * @return
+     */
+    @Bean
+    @Primary
+    public DataSource druidDataSource(DataSourceConnection dataSourceConnection) {
+        System.out.println(dataSourceConnection);
+        DruidDataSource druidDataSource = new DruidDataSource();
+        druidDataSource.setName(dataSourceConnection.getName());
+        druidDataSource.setUsername(dataSourceConnection.getUserName());
+        druidDataSource.setPassword(dataSourceConnection.getPassword());
+        druidDataSource.setUrl(dataSourceConnection.getUrl());
+        // druidDataSource可以不指定driverClassName，会自动根据url识别
+        druidDataSource.setDriverClassName(dataSourceConnection.getDriverClassName());
+        return druidDataSource;
+    }
+
+    /**
+     * 将数据源注入JdbcTemplate，再将JdbcTemplate注入到容器中，使用JdbcTemplate来操作数据库
+     * @param druidDataSource
+     * @return
+     */
+    @Bean
+    public JdbcTemplate jdbcTemplate(DataSource druidDataSource) {
+        return new JdbcTemplate(druidDataSource);
+    }
+
+
+    /**
+     * 将数据源注入PlatformTransactionManager，这是一个接口，使用DataSourceTransactionManager的实现来管理事务
+     * 注意，如果想要生效，一定要在配置类加@EnableTransactionManagement注解
+     * @param druidDataSource
+     * @return
+     */
+    @Bean
+    public PlatformTransactionManager transactionManager(DataSource druidDataSource) {
+        return new DataSourceTransactionManager(druidDataSource);
+    }
+}
+```
+
+#### 3.2 全局异常处理
+使用`HandlerExceptionResolver`来处理全局异常，每当项目中有异常时该类都会尝试解决，我们可以在这个类中将消息封装成`json`返回给前端。同时消息可以使用`MessageSource`来支持国际化处理。因此我们可以自定义一个异常类`GlobalException`继承`NestedRuntimeException`，该异常类支持可以直接将消息当做文本返回，也可以支持传入定义的`code`，然后将`code`转换成国际化资源文件中定义的消息然后再返回给前端，国际化资源文件支持占位符。国际化资源文件中`Property key`对应着异常类中的`code`，而所有需要使用的`code`我们可以统一定义在一个类里。而为了防止一个类中的`code`随时间越来越大，我们可以分模块定义`code`，而统一定义一个接口返回`code`。异常类中接收这个接口，其它所有定义`code`的类必须实现这个接口
+* 定义返回`code` 统一接口类`GlobalExceptionCodeResolver`
+```java
+package com.ddf.springmvc.annotation.configuration.exception;
+
+/**
+ * @author DDf on 2018/8/18
+ * 为自定义异常类消息代码定义统一接口，所以定义消息代码的类必须实现这个接口
+ */
+public interface GlobalExceptionCodeResolver {
+    String getCode();
+}
+```
+* 使用枚举类定义具体的`code`，需要实现接口`GlobalExceptionCodeResolver`
+```
+/**
+ * 
+ */
+package com.ddf.springmvc.annotation.configuration.exception;
+
+/**
+ * 定义异常消息的代码，get方法返回实际值，这个值需要在exception.properties、exception_zh_CN.properties、
+ * exception_en_US中配置，请根据实际情况在对应的Locale资源文件中配置，至少配置exception.properties
+ * @author DDF 2017年12月1日
+ *
+ */
+public enum GlobalExceptionEnum implements GlobalExceptionCodeResolver {
+ SYS_ERROR("SYS_ERROR"),
+ PLACEHOLDER_DEMO("PLACEHOLDER_DEMO"),
+ USER_EXIST("USER_EXIST")
+
+ ;
+
+ private String code;
+
+ GlobalExceptionEnum (String code) {
+  this.code = code;
+ }
+
+ @Override
+ public String getCode() {
+  return code;
+ }
+}
+```
+* 自定义异常类`GlobalException`，继承`NestedRuntimeException`
+```java
+package com.ddf.springmvc.annotation.configuration.exception;
+
+import org.springframework.core.NestedRuntimeException;
+
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * @author DDf on 2018/8/18
+ * 自定义异常类
+ */
+public class GlobalException extends NestedRuntimeException {
+    private static final long serialVersionUID = 1L;
+    private String code;
+    private String message;
+    // 可替换消息参数，消息配置中不确定的值用大括号包着数组角标的方式，如{0} 占位，抛出异常的时候使用带params的构造函数赋值，即可替换
+    private Object[] params;
+
+    public GlobalException(String msg) {
+        super(msg);
+        this.code = msg;
+    }
+
+    public Map<String, String> toMap() {
+        Map<String, String> map = new HashMap<>();
+        map.put("code", code);
+        map.put("message", message);
+        return map;
+    }
+
+    /**
+     * @param enumClass
+     * @param params
+     */
+    public GlobalException(GlobalExceptionCodeResolver codeResolver, Object... params) {
+        super(codeResolver.getCode());
+        this.code = codeResolver.getCode();
+        this.params = params;
+    }
+
+    public GlobalException(GlobalExceptionCodeResolver codeResolver) {
+        super(codeResolver.getCode());
+        this.code = codeResolver.getCode();
+    }
+
+    public String getCode() {
+        return code;
+    }
+
+    public void setCode(String code) {
+        this.code = code;
+    }
+
+    @Override
+    public String getMessage() {
+        return message;
+    }
+
+    public void setMessage(String message) {
+        this.message = message;
+    }
+
+    public Object[] getParams() {
+        return params;
+    }
+
+    public void setParams(Object[] params) {
+        this.params = params;
+    }
+}
+```
+* 定义异常`i18N`文件,在`classpath:/exception/`下,`baseName`取名为`exception`。目前添加一个默认的，一个中文的，一个英文的
+
+
+* 将异常资源文件指定给`MessageSource`，并将`MessageSource`交由容器管理，修改主配置类`RootApplicationContextConfig.java`
+```java
+package com.ddf.springmvc.annotation.configuration.ioc;
+
+import com.alibaba.druid.pool.DruidDataSource;
+import com.ddf.springmvc.annotation.configuration.jdbc.DataSourceConnection;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.context.MessageSource;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.ComponentScan;
+import org.springframework.context.annotation.Primary;
+import org.springframework.context.support.ResourceBundleMessageSource;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.stereotype.Controller;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.EnableTransactionManagement;
+
+import javax.sql.DataSource;
+
+/**
+ * @author DDf on 2018/8/16
+ * 指定Spring根容器的配置类，排除web相关的bean
+ *
+ * @EnableTransactionManagement 开启基于注解的事务支持
+ *
+ */
+@ComponentScan(value = "com.ddf.springmvc.annotation",
+        excludeFilters = {@ComponentScan.Filter(value = Controller.class)})
+@EnableTransactionManagement
+public class RootApplicationContextConfig {
+
+    public RootApplicationContextConfig() {
+        System.out.println("RootApplicationContextConfig配置类被读取。。。。。。。。。。。。。。");
+    }
+
+    /**
+     * 注册解析国际化资源文件的ResourceBundleMessageSource
+     * @return
+     */
+    @Bean
+    public MessageSource messageSource() {
+        ResourceBundleMessageSource resourceBundleMessageSource = new ResourceBundleMessageSource();
+        // 指定资源文件，可以多个使用setBasenames指定多个，从classpath下读取
+        resourceBundleMessageSource.setBasename("/exception/exception");
+        System.out.println("注册MessageSource： " + resourceBundleMessageSource);
+        return resourceBundleMessageSource;
+    }
+
+    /**
+     * 用户解析和格式化JSON的对象，在这里全局注册一个，用的时候直接注入即可。
+     * @return
+     */
+    @Bean
+    @Primary
+    public ObjectMapper objectMapper() {
+        return new ObjectMapper();
+    }
+
+    /**
+     * 向容器中注入DataSource，属性来自于DataSourceConnection，实际注入的是DataSource的DruidDataSource实现
+     * DataSourceConnection会自动从IOC容器中获取
+     * @Primary 如果要注入通过类型获取的Bean类型为DataSource， 则默认获取druidDataSource。防止注入多个不同名DataSource其它使用地方报错
+     * @param dataSourceConnection
+     * @return
+     */
+    @Bean
+    @Primary
+    public DataSource druidDataSource(DataSourceConnection dataSourceConnection) {
+        System.out.println(dataSourceConnection);
+        DruidDataSource druidDataSource = new DruidDataSource();
+        druidDataSource.setName(dataSourceConnection.getName());
+        druidDataSource.setUsername(dataSourceConnection.getUserName());
+        druidDataSource.setPassword(dataSourceConnection.getPassword());
+        druidDataSource.setUrl(dataSourceConnection.getUrl());
+        // druidDataSource可以不指定driverClassName，会自动根据url识别
+        druidDataSource.setDriverClassName(dataSourceConnection.getDriverClassName());
+        return druidDataSource;
+    }
+
+    /**
+     * 将数据源注入JdbcTemplate，再将JdbcTemplate注入到容器中，使用JdbcTemplate来操作数据库
+     * @param druidDataSource
+     * @return
+     */
+    @Bean
+    public JdbcTemplate jdbcTemplate(DataSource druidDataSource) {
+        return new JdbcTemplate(druidDataSource);
+    }
+
+
+    /**
+     * 将数据源注入PlatformTransactionManager，这是一个接口，使用DataSourceTransactionManager的实现来管理事务
+     * 注意，如果想要生效，一定要在配置类加@EnableTransactionManagement
+     * @param druidDataSource
+     * @return
+     */
+    @Bean
+    public PlatformTransactionManager transactionManager(DataSource druidDataSource) {
+        return new DataSourceTransactionManager(druidDataSource);
+    }
+}
+```
+
+* 新建异常处理类`GlobalExceptionHandler`实现`HandlerExceptionResolver`接口
+```java
+package com.ddf.springmvc.annotation.configuration.exception;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.MessageSource;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.servlet.HandlerExceptionResolver;
+import org.springframework.web.servlet.ModelAndView;
+
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.util.Locale;
+import com.ddf.springmvc.annotation.configuration.ioc.RootApplicationContextConfig;
+
+/**
+ * @author DDf on 2018/8/18
+ * 处理全局异常，将异常消息使用json返回到前端
+ * 该类需要交由容器管理，为方便统一在主配置类看使用了哪些组件，没有在本类使用注解，
+*  需要在主配置中注册组件
+ */
+public class GlobalExceptionHandler implements HandlerExceptionResolver {
+    @Autowired
+    private ObjectMapper objectMapper;
+    @Autowired
+    private MessageSource messageSource;
+
+    @Override
+    public ModelAndView resolveException(HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) {
+        response.setContentType("application/json;charset=UTF-8");
+        Locale locale = request.getLocale();
+        GlobalException globalException;
+        if (ex instanceof GlobalException) {
+            globalException = (GlobalException) ex;
+        } else {
+            globalException = new GlobalException(ex.getMessage());
+            globalException.setCode(ex.getMessage());
+        }
+        response.setStatus(HttpStatus.INTERNAL_SERVER_ERROR.value());
+        // 使用messageSource将code到资源文件中根据locale解析成对应的消息文件，并填充占位符。getMessage()重载了多个方法，
+        // 如果不存在可以抛异常，也可以 给一个默认值，这里使用了给默认值的处理，默认值即是code
+        globalException.setMessage(messageSource.getMessage(globalException.getCode(), globalException.getParams(),
+                globalException.getCode(), locale));
+        try {
+            response.getWriter().write(objectMapper.writeValueAsString(globalException.toMap()));
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        return null;
+    }
+}
+```
+* 在主配置类`RootApplicationContextConfig`注册组件`GlobalExceptionHandler`
+```java
+package com.ddf.springmvc.annotation.configuration.ioc;
+
+import com.alibaba.druid.pool.DruidDataSource;
+import com.ddf.springmvc.annotation.configuration.exception.GlobalExceptionHandler;
+import com.ddf.springmvc.annotation.configuration.jdbc.DataSourceConnection;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.context.MessageSource;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.ComponentScan;
+import org.springframework.context.annotation.Primary;
+import org.springframework.context.support.ResourceBundleMessageSource;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.stereotype.Controller;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.EnableTransactionManagement;
+
+import javax.sql.DataSource;
+
+/**
+ * @author DDf on 2018/8/16
+ * 指定Spring根容器的配置类，排除web相关的bean
+ *
+ * @EnableTransactionManagement 开启基于注解的事务支持
+ *
+ */
+@ComponentScan(value = "com.ddf.springmvc.annotation",
+        excludeFilters = {@ComponentScan.Filter(value = Controller.class)})
+@EnableTransactionManagement
+public class RootApplicationContextConfig {
+
+    public RootApplicationContextConfig() {
+        System.out.println("RootApplicationContextConfig配置类被读取。。。。。。。。。。。。。。");
+    }
+
+    /**
+     * 注册解析国际化资源文件的ResourceBundleMessageSource
+     * @return
+     */
+    @Bean
+    public MessageSource messageSource() {
+        ResourceBundleMessageSource resourceBundleMessageSource = new ResourceBundleMessageSource();
+        // 指定资源文件，可以多个使用setBasenames指定多个，从classpath下读取
+        resourceBundleMessageSource.setBasename("/exception/exception");
+        System.out.println("注册MessageSource： " + resourceBundleMessageSource);
+        return resourceBundleMessageSource;
+    }
+
+    /**
+     * 将处理全局异常的Bean容器管理
+     * @return
+     */
+    @Bean
+    public GlobalExceptionHandler globalExceptionHandler() {
+        return new GlobalExceptionHandler();
+    }
+
+    /**
+     * 用户解析和格式化JSON的对象，在这里全局注册一个，用的时候直接注入即可。
+     * @return
+     */
+    @Bean
+    @Primary
+    public ObjectMapper objectMapper() {
+        return new ObjectMapper();
+    }
+
+    /**
+     * 向容器中注入DataSource，属性来自于DataSourceConnection，实际注入的是DataSource的DruidDataSource实现
+     * DataSourceConnection会自动从IOC容器中获取
+     * @Primary 如果要注入通过类型获取的Bean类型为DataSource， 则默认获取druidDataSource。防止注入多个不同名DataSource其它使用地方报错
+     * @param dataSourceConnection
+     * @return
+     */
+    @Bean
+    @Primary
+    public DataSource druidDataSource(DataSourceConnection dataSourceConnection) {
+        System.out.println(dataSourceConnection);
+        DruidDataSource druidDataSource = new DruidDataSource();
+        druidDataSource.setName(dataSourceConnection.getName());
+        druidDataSource.setUsername(dataSourceConnection.getUserName());
+        druidDataSource.setPassword(dataSourceConnection.getPassword());
+        druidDataSource.setUrl(dataSourceConnection.getUrl());
+        // druidDataSource可以不指定driverClassName，会自动根据url识别
+        druidDataSource.setDriverClassName(dataSourceConnection.getDriverClassName());
+        return druidDataSource;
+    }
+
+    /**
+     * 将数据源注入JdbcTemplate，再将JdbcTemplate注入到容器中，使用JdbcTemplate来操作数据库
+     * @param druidDataSource
+     * @return
+     */
+    @Bean
+    public JdbcTemplate jdbcTemplate(DataSource druidDataSource) {
+        return new JdbcTemplate(druidDataSource);
+    }
+
+
+    /**
+     * 将数据源注入PlatformTransactionManager，这是一个接口，使用DataSourceTransactionManager的实现来管理事务
+     * 注意，如果想要生效，一定要在配置类加@EnableTransactionManagement
+     * @param druidDataSource
+     * @return
+     */
+    @Bean
+    public PlatformTransactionManager transactionManager(DataSource druidDataSource) {
+        return new DataSourceTransactionManager(druidDataSource);
+    }
+}
+```
+#### 3.3 测试事务与异常
+##### 3.3.1 异常演示
+新建异常演示类`ExceptionController.java`
+```java
+package com.ddf.springmvc.annotation.controller;
+
+import com.ddf.springmvc.annotation.configuration.exception.GlobalException;
+import com.ddf.springmvc.annotation.configuration.exception.GlobalExceptionEnum;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Controller;
+import org.springframework.web.bind.annotation.RequestMapping;
+
+/**
+ * @author DDf on 2018/8/18
+ */
+@Controller
+@RequestMapping("exception")
+public class ExceptionController {
+
+    /**
+     * 抛出非GlobalException的异常也可以处理
+     */
+    @RequestMapping("throwString")
+    public void throwString() {
+        throw new RuntimeException("运行出错");
+    }
+
+    /**
+     * 抛出GlobalException，code需要在实现了GlobalExceptionCodeResolver接口的类中定义，该code还需要在资源文件exception.properties中定义
+     * 对应的value来作为消息解析 /resources/exception/exception.properties exception_en_US.properties exception_ch_CN.properties
+     */
+    @RequestMapping("throwCode")
+    public void throwCode() {
+        throw new GlobalException(GlobalExceptionEnum.SYS_ERROR);
+    }
+
+
+    /**
+     * 抛出GlobalException，code需要在实现了GlobalExceptionCodeResolver接口的类中定义，该code还需要在资源文件exception.properties中定义
+     * 对应的value来作为消息解析 /resources/exception/exception.properties exception_en_US.properties exception_ch_CN.properties
+     * ,资源文件中对应key的value可以使用{0}{1}占位符，然后在构造函数中传入替换的值，即可替换
+     */
+    @RequestMapping("throwCodeParam")
+    public void throwCodeParam() {
+        throw new GlobalException(GlobalExceptionEnum.PLACEHOLDER_DEMO, System.currentTimeMillis(),
+                System.currentTimeMillis());
+    }
+}
+```
+
+
+##### 3.3.2 事务演示
+此章节对数据库操作前面主配置类中注入的`JdbcTemplate`
+* 在上述注入的数据库连接建立表,数据库的建立与数据表的建立需要分开执行，数据库建立后，进入对应的数据库执行建表语句
+```
+CREATE DATABASE `spring-annotation` CHARACTER SET utf8 COLLATE utf8_general_ci;
+
+USER DATABASE spring-annotation
+DROP TABLE IF EXISTS USER;
+CREATE TABLE USER(
+ ID INTEGER NOT NULL AUTO_INCREMENT PRIMARY KEY,
+ NAME VARCHAR(64),
+ PASSWORD VARCHAR(64),
+ BIRTH_DAY DATE,
+ TEL VARCHAR(32),
+  ADDRESS VARCHAR(200)
+);
+```
+* 创建实体类`User.java`
+```java
+package com.ddf.springmvc.annotation.entity;
+
+import org.springframework.jdbc.core.RowMapper;
+
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.Date;
+
+/**
+ * @author DDf on 2018/8/19
+ */
+public class User implements RowMapper {
+    private Integer id;
+    private String name;
+    private String password;
+    private Date birthDay;
+    private String address;
+    private String tel;
+
+    public User() {
+    }
+
+    public User(Integer id, String name, String password, Date birthDay, String address, String tel) {
+        this.id = id;
+        this.name = name;
+        this.password = password;
+        this.birthDay = birthDay;
+        this.address = address;
+        this.tel = tel;
+    }
+
+    public User(String name, String password, Date birthDay, String address, String tel) {
+        this.name = name;
+        this.password = password;
+        this.birthDay = birthDay;
+        this.address = address;
+        this.tel = tel;
+    }
+
+    public Integer getId() {
+        return id;
+    }
+
+    public void setId(Integer id) {
+        this.id = id;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public Date getBirthDay() {
+        return birthDay;
+    }
+
+    public void setBirthDay(Date birthDay) {
+        this.birthDay = birthDay;
+    }
+
+    public String getAddress() {
+        return address;
+    }
+
+    public void setAddress(String address) {
+        this.address = address;
+    }
+
+    public String getTel() {
+        return tel;
+    }
+
+    public void setTel(String tel) {
+        this.tel = tel;
+    }
+
+    public String getPassword() {
+        return password;
+    }
+
+    public void setPassword(String password) {
+        this.password = password;
+    }
+
+    @Override
+    public User mapRow(ResultSet resultSet, int i) throws SQLException {
+        User user = new User();
+        user.setId(resultSet.getInt("id"));
+        user.setName(resultSet.getString("name"));
+        user.setPassword(resultSet.getString("password"));
+        user.setBirthDay(resultSet.getDate("BIRTH_DAY"));
+        user.setAddress(resultSet.getString("address"));
+        user.setTel(resultSet.getString("tel"));
+        return user;
+    }
+
+    @Override
+    public String toString() {
+        return "User{" +
+                "id=" + id +
+                ", name='" + name + '\'' +
+                ", password='" + password + '\'' +
+                ", birthDay=" + birthDay +
+                ", address='" + address + '\'' +
+                ", tel='" + tel + '\'' +
+                '}';
+    }
+}
+```
+* 用户操作，需要判断重复，先定义用户存在的异常消息，先定义用户存在的代码，修改`GlobalExceptionEnum.java`
+```java
+/**
+ * 
+ */
+package com.ddf.springmvc.annotation.configuration.exception;
+
+/**
+ * 定义异常消息的代码，get方法返回实际值，这个值需要在exception.properties、exception_zh_CN.properties、
+ * exception_en_US中配置，请根据实际情况在对应的Locale资源文件中配置，至少配置exception.properties
+ * @author DDF 2017年12月1日
+ *
+ */
+public enum GlobalExceptionEnum implements GlobalExceptionCodeResolver {
+ SYS_ERROR("SYS_ERROR"),
+ PLACEHOLDER_DEMO("PLACEHOLDER_DEMO"),
+ USER_EXIST("USER_EXIST")
+
+ ;
+
+ private String code;
+
+ GlobalExceptionEnum (String code) {
+  this.code = code;
+ }
+
+ @Override
+ public String getCode() {
+  return code;
+ }
+}
+```
+
+* 在异常资源文件中定义用户存在的代码对应的异常消息
+默认exception.properties
+```
+USER_EXIST=用户【{0}】已经存在
+```
+中文exception_zh_CN.properties
+```
+USER_EXIST=用户【{0}】已经存在
+```
+英文exception_en_US.properties
+```
+USER_EXIST=User of name [{0}] is exist
+```
+
+* 创建操作用户的数据层`UserDao.java`
+```java
+package com.ddf.springmvc.annotation.configuration.dao;
+
+import com.ddf.springmvc.annotation.configuration.exception.GlobalException;
+import com.ddf.springmvc.annotation.configuration.exception.GlobalExceptionEnum;
+import com.ddf.springmvc.annotation.entity.User;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * @author DDf on 2018/8/19
+ */
+@Repository
+public class UserDao {
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    public void addUser(User user) {
+
+        String select = "SELECT * FROM USER WHERE NAME = ?";
+        List<Map<String, Object>> list = jdbcTemplate.queryForList(select, user.getName());
+        if (list != null && list.size() > 0) {
+            throw new GlobalException(GlobalExceptionEnum.USER_EXIST, user.getName());
+        }
+
+        String sql = "INSERT INTO USER(NAME, PASSWORD, BIRTH_DAY, TEL, ADDRESS) VALUES (?, ?, ?, ?, ?)";
+        jdbcTemplate.update(sql, user.getName(), user.getPassword(), user.getBirthDay(), user.getTel(), user.getAddress());
+    }
+
+    public List<User> list() {
+        String sql = "SELECT * FROM USER ";
+        return jdbcTemplate.query(sql, new User());
+    }
+}
+```
+
+* 创建用户业务层`UserService.java`
+```java
+package com.ddf.springmvc.annotation.service;
+
+import com.ddf.springmvc.annotation.configuration.dao.UserDao;
+import com.ddf.springmvc.annotation.configuration.exception.GlobalException;
+import com.ddf.springmvc.annotation.entity.User;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
+
+/**
+ * @author DDf on 2018/8/19
+ */
+@Service
+public class UserService {
+
+    @Autowired
+    private UserDao userDao;
+
+    @Transactional
+    public void addUser(User user) {
+        userDao.addUser(user);
+        throw new GlobalException("运行出错");
+    }
+
+    @Transactional(readOnly = true)
+    public List<User> list() {
+        return userDao.list();
+    }
+}
+```
+* 创建用户调用层`UserController.java`
+```java
+package com.ddf.springmvc.annotation.controller;
+
+import com.ddf.springmvc.annotation.entity.User;
+import com.ddf.springmvc.annotation.service.UserService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
+
+/**
+ * @author DDf on 2018/8/19
+ */
+@RestController
+@RequestMapping("/user")
+public class UserController {
+    @Autowired
+    private UserService userService;
+
+    @RequestMapping("/add")
+    public List<User> addUser(@RequestBody User user) {
+        userService.addUser(user);
+        return userService.list();
+    }
+
+    @RequestMapping("/list")
+    public List<User> list() {
+        return userService.list();
+    }
+}
+```
+* 演示，添加用户，因为添加用户做了重复性判断，因此保存两次即可，既可以测试事务，又可以看到异常
+第一次调用成功，
+
+
+查看数据库，增加了一条数据
+
+
+再次调用，提示用户已经存在，而且用户名作为占位符被填充了
+
+
+再次查看数据库，表里依然还是之前的那条数据
 

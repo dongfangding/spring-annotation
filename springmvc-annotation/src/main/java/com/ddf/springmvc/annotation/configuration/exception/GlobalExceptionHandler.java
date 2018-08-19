@@ -36,6 +36,8 @@ public class GlobalExceptionHandler implements HandlerExceptionResolver {
             globalException.setCode(ex.getMessage());
         }
         response.setStatus(HttpStatus.INTERNAL_SERVER_ERROR.value());
+        // 使用messageSource将code到资源文件中根据locale解析成对应的消息文件，并填充占位符。getMessage()重载了多个方法，
+        // 如果不存在可以抛异常，也可以 给一个默认值，这里使用了给默认值的处理，默认值即是code
         globalException.setMessage(messageSource.getMessage(globalException.getCode(), globalException.getParams(),
                 globalException.getCode(), locale));
         try {

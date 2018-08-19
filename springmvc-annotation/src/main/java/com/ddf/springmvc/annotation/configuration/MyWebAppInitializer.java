@@ -45,7 +45,7 @@ import java.util.Set;
  *  =============================================================
  *  综上所述，如果我们要基于配置类的方法来自定义创建Spring和SpringWebmvc的容器，则需要继承AbstractAnnotationConfigDispatcherServletInitializer
  *  这个类即可，而通过重写getRootConfigClasses()这个方法来指定IOC容器的配置类，getServletConfigClasses()这个方法
- *  来指定WEB容器的配置类，然后复写getServletMappings方法指定DispatcherServlet的映射规则
+ *  来指定WEB容器的配置类，然后复写getServletMappings()方法指定DispatcherServlet的映射规则
  *
  */
 public class MyWebAppInitializer extends AbstractAnnotationConfigDispatcherServletInitializer {

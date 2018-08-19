@@ -99,6 +99,7 @@ public class RootApplicationContextConfig {
 
     /**
      * 将数据源注入PlatformTransactionManager，这是一个接口，使用DataSourceTransactionManager的实现来管理事务
+     * 注意，如果想要生效，一定要在配置类加@EnableTransactionManagement
      * @param druidDataSource
      * @return
      */

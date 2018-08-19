@@ -21,7 +21,6 @@ public class UserService {
     @Transactional
     public void addUser(User user) {
         userDao.addUser(user);
-        throw new GlobalException("运行出错");
     }
 
     @Transactional(readOnly = true)

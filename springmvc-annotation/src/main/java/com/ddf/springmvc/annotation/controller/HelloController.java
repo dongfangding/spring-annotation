@@ -30,6 +30,12 @@ public class HelloController {
         return helloService.hello(name);
     }
 
+
+    /**
+     * 需要导入jackson的包，则会返回json
+     * @param name
+     * @return
+     */
     @RequestMapping("/json")
     public Map json(@RequestParam String name) {
         System.out.println(requestContext.getParamsMap());
@@ -52,6 +58,7 @@ public class HelloController {
         System.out.println(applicationContext.getParent().getClass());
         System.out.println(applicationContext==applicationContext.getParent());
 
+        // 这个会打印所有在web容器中注册的bean
         String[] names = applicationContext.getBeanDefinitionNames();
         for (String name : names) {
             System.out.println(name);
@@ -59,6 +66,7 @@ public class HelloController {
 
         System.out.println("root application context。。。。。。。。。。。。。。。。。。。。。。。");
 
+        // 这个会打印所有在Root IOC容器中注册的bean
         String[] names1 = applicationContext.getParent().getBeanDefinitionNames();
         for (String name : names1) {
             System.out.println(name);
