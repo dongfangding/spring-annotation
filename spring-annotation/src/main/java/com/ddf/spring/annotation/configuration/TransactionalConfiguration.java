@@ -8,6 +8,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.PlatformTransactionManager;
 
+import javax.sql.DataSource;
+
 /**
  * @author DDf on 2018/8/14
  * @Configuration 表名当时是一个配置类，如果自定义的扫描路径下包含了这个类，则该类会被自动识别成一个配置类
@@ -16,15 +18,14 @@ import org.springframework.transaction.PlatformTransactionManager;
 @Configuration
 public class TransactionalConfiguration {
     /**
-     * 向容器中注入DruidDataSource，属性来自于DataSourceConnection，
+     * 向容器中注入DataSource类型，实际注入的是实现类DruidDataSource，属性来自于DataSourceConnection，
      * DataSourceConnection会自动从IOC容器中获取
-     * 目前采用的main函数的写法，手动指定一个主配置类，因为不是web环境，当前配置类没有指定扫描包，而是在主配置类上指定的，
-     * 所以当前类的这个方法的DataSourceConnection可能会提示没有这个bean，不用理会，如果是web环境就不会有问题了
+     * 当前配置类没有指定扫描包，而是在主配置类上指定的，所以当前类的这个方法的DataSourceConnection可能会提示没有这个bean，不用理会
      * @param dataSourceConnection
      * @return
      */
     @Bean
-    public DruidDataSource druidDataSource(DataSourceConnection dataSourceConnection) {
+    public DataSource druidDataSource(DataSourceConnection dataSourceConnection) {
         DruidDataSource druidDataSource = new DruidDataSource();
         druidDataSource.setName(dataSourceConnection.getName());
         druidDataSource.setUsername(dataSourceConnection.getUserName());
@@ -41,7 +42,7 @@ public class TransactionalConfiguration {
      * @return
      */
     @Bean
-    public JdbcTemplate jdbcTemplate(DruidDataSource druidDataSource) {
+    public JdbcTemplate jdbcTemplate(DataSource druidDataSource) {
         return new JdbcTemplate(druidDataSource);
     }
 
@@ -52,7 +53,7 @@ public class TransactionalConfiguration {
      * @return
      */
     @Bean
-    public PlatformTransactionManager transactionManager(DruidDataSource druidDataSource) {
+    public PlatformTransactionManager transactionManager(DataSource druidDataSource) {
         return new DataSourceTransactionManager(druidDataSource);
     }
 }
