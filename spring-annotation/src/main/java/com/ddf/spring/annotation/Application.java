@@ -12,9 +12,7 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 import java.sql.SQLException;
-import java.time.LocalDate;
 import java.util.Calendar;
-import java.util.Date;
 import java.util.GregorianCalendar;
 
 /**
@@ -39,7 +37,7 @@ public class Application {
         // 测试@Autowired注入多个相同类型的Bean
         testAutowired(applicationContext);
         // 测试@Profile根据环境注入Bean
-        testProfile(applicationContext);
+        testProfile();
         // 测试AOP
         testAspect(applicationContext);
         // 测试获取数据库连接
@@ -72,7 +70,7 @@ public class Application {
      *
      * @param applicationContext
      */
-    public static void testPrototypeScopeService(ApplicationContext applicationContext) {
+    private static void testPrototypeScopeService(ApplicationContext applicationContext) {
         System.out.println("\n-----------------------测试@Scope开始-------------------------");
         UserService userService = (UserService) applicationContext.getBean("userService");
         UserService userService1 = applicationContext.getBean(UserService.class);
@@ -88,7 +86,7 @@ public class Application {
      * 测试单实例bean的懒加载，只有等使用的时候再创建实例。
      * IOC容器启动后不会创建该bean的实例，如果是在该方法中才创建这个bean的实例，并且获得的两个bean是同一个的话，则测试通过。
      */
-    public static void testLazyBeanService(ApplicationContext applicationContext) {
+    private static void testLazyBeanService(ApplicationContext applicationContext) {
         System.out.println("\n---------------测试单实例bean的@Lazy懒加载开始----------------------");
         LazyBeanService lazyBeanService = applicationContext.getBean(LazyBeanService.class);
         LazyBeanService lazyBeanService1 = applicationContext.getBean(LazyBeanService.class);
@@ -101,7 +99,7 @@ public class Application {
      * 测试通过FactoryBean接口导入单实例与Prototype作用域的组件,根据打印可以看出FactoryBean创建的单实例Bean都是懒加载的
      * @param applicationContext
      */
-    public static void testFactoryBeanPrototypeBean(ApplicationContext applicationContext) {
+    private static void testFactoryBeanPrototypeBean(ApplicationContext applicationContext) {
         System.out.println("\n----------测试通过FactoryBean注册单实例和Prototype作用域的组件开始----------");
         FactorySingletonBean factorySingletonBean = applicationContext.getBean(FactorySingletonBean.class);
         FactorySingletonBean factorySingletonBean1 = applicationContext.getBean(FactorySingletonBean.class);
@@ -119,7 +117,7 @@ public class Application {
      * 测试通过@PropertySource和@Value注解来对属性进行赋值
      * @param applicationContext
      */
-    public static void testPropertySourceValue(ApplicationContext applicationContext) {
+    private static void testPropertySourceValue(ApplicationContext applicationContext) {
         System.out.println("\n---------------测试@PropertySource和@Value赋值开始----------------");
         User user = applicationContext.getBean(User.class);
         System.out.println("user属性为： " + user.toString());
@@ -135,7 +133,7 @@ public class Application {
      * 默认注入哪个Bean {@link AutowiredService}
      * @param applicationContext
      */
-    public static void testAutowired(ApplicationContext applicationContext) {
+    private static void testAutowired(ApplicationContext applicationContext) {
         System.out.println("\n--------------测试autowired注入多个相同类型的类开始-----------------");
         AutowiredBean autowiredBean = (AutowiredBean) applicationContext.getBean("autowiredBean");
         AutowiredBean autowiredBean2 = (AutowiredBean) applicationContext.getBean("autowiredBean2");
@@ -172,12 +170,11 @@ public class Application {
      * 切换profile有两种方式：
      * 1. 在java虚拟机启动参数加 -Dspring.profiles.active=test
      * 2. 如下演示，使用代码切换，可以将切换的变量放在配置文件，spring-boot配置文件即是这种方式
-     * @param applicationContext
      */
-    public static void testProfile(AnnotationConfigApplicationContext applicationContext) {
+    private static void testProfile() {
         System.out.println("\n------------------测试@Profile开始-------------------------");
         // 重新新建一个IOC容器
-        applicationContext = new AnnotationConfigApplicationContext();
+        AnnotationConfigApplicationContext applicationContext = new AnnotationConfigApplicationContext();
         // 注册配置类
         applicationContext.register(ProfileConfiguration.class);
         // 设置当前激活的环境profile
@@ -205,14 +202,14 @@ public class Application {
      * 测试AOP
      * @param applicationContext
      */
-    public static void testAspect(ApplicationContext applicationContext) {
+    private static void testAspect(ApplicationContext applicationContext) {
         System.out.println("\n--------------------测试AOP开始----------------------------");
 
         UserService userService = applicationContext.getBean(UserService.class);
         userService.welcome("ddf");
         try {
             userService.welcomeException("ddf");
-        } catch (Exception e) {
+        } catch (Exception ignored) {
         }
 
         System.out.println("--------------------测试AOP结束----------------------------\n");
@@ -222,7 +219,7 @@ public class Application {
     /**
      * 测试连接数据源
      */
-    public static void testDruidDataSource(ApplicationContext applicationContext) {
+    private static void testDruidDataSource(ApplicationContext applicationContext) {
         System.out.println("\n--------------------获取DruidDataSource数据库连接开始----------------------------");
         DataSourceConnection dataSourceConnection = applicationContext.getBean(DataSourceConnection.class);
         System.out.println(dataSourceConnection);
@@ -243,17 +240,17 @@ public class Application {
      * 使用事务和不使用事务对比
      * @param applicationContext
      */
-    public static void testAddPerson(ApplicationContext applicationContext) {
+    private static void testAddPerson(ApplicationContext applicationContext) {
         System.out.println("\n-------------------测试增加一个Person开始-------------------------");
         PersonService personService = applicationContext.getBean(PersonService.class);
         Calendar calendar = new GregorianCalendar();
-        calendar.set(1992, 4, 29);
+        calendar.set(1992, Calendar.MAY, 29);
         try {
             personService.add(new Person("no_transactional", calendar.getTime(), "上海市", "18356789999"));
-        } catch (Exception e) {}
+        } catch (Exception ignored) {}
         try {
             personService.addWithTransactional(new Person("with_transactional", calendar.getTime(), "上海市", "18356789999"));
-        } catch (Exception e) {}
+        } catch (Exception ignored) {}
         System.out.println("-------------------测试增加一个Person结束-------------------------\n");
     }
 
